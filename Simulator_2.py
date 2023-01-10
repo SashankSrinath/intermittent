@@ -1,40 +1,40 @@
-# Interpolation in milliseconds - TO CONFIRM IF NEEDED
-# Prediction of voltage depending on value ( say we need 2V after discharge )
-# Automation of tasks to be done ( maybe with reading some csv )
-# How much to sleep to finish task in one shot - DONE APPROX
-
-# C:\Users\lenovo\Desktop\Study\S9\Group_project\Task_description.csv
-
-import csv, sys, os
-import numpy
+import csv, sys, os, numpy, datetime
 import matplotlib.pyplot as plt
-import datetime
 
 V_max = 3.3 # Device max voltage
 V_min = 1.8 # Device min voltage
 C = 0.5 # Capacitance in Farad
-pmax = 0.000418 # Datasheet of LH3 solar cell
+pmax = 0.000418 # Datasheet of LH3 solar cell. NOTE: Not used anymore
 Gstandard = 500/120 # pmax calculated at 500 lux. conversion from  
                         # solar w/m2 to lux is 1000 w/m2 is 120,000 lux
+                        #  Not used in current version
     
 def main():
         
-    #Irradiance = []
     time = []
     power_data = []
+    accuracy = []
     
+    current_V = 0
+    desired_V = 0
+    
+    
+    # Reading the dataset
     with open(r"C:\Users\lenovo\Desktop\Study\S9\Group_project\capture.csv","r") as csvfile:
         reader = csv.DictReader(csvfile)
-        
         for row in reader:
             if(row["Date"] == "02-11-2022"):
                 power_data.append(float(row["Power"]))
-                time.append(row["Time"])
-    
+                time.append(row["Time"])   
     csvfile.close()
     
+    # Plot for the capacitor charging rate vs time and cumulative V vs time
     FullDay_Plot(power_data)
     
+    #performance_analysis(power_data)
+    
+    accuracy = numpy.genfromtxt('Accuracy.csv', delimiter=',', dtype=int)
+
     print("Dataset available from", time[0], "to", time[-1])
     
     inp_err = 0
@@ -46,7 +46,8 @@ def main():
             continue
         inp_err, sec = hour_to_sec(inp)
     
-    file_flag = input("Task file present? (y/n) : ")
+    # Check if user wants to give task description file or not
+    file_flag = input("Task description file present? (y/n) : ")
     
     while(file_flag != 'y' and file_flag != 'n'):
         print("Invalid input!")
@@ -54,9 +55,10 @@ def main():
     
     if(file_flag =='y'):
         
-        #file_path = r"C:\Users\lenovo\Desktop\Study\S9\Group_project\Task_description.csv"
-        file_path = input("Enter file path: ")
+        file_path = r"C:\Users\lenovo\Desktop\Study\S9\Group_project\Task_description.csv"
+        #file_path = input("Enter file path: ")
         
+        # Get current_V and desired_V from file
         if os.path.exists(file_path):
             with open(file_path,"r") as csvfile_2:
                 reader = csv.DictReader(csvfile_2)
@@ -65,8 +67,8 @@ def main():
                         continue
                     else:
                         current_V = row["current_V"]
-                        desired_V = row["desired_V"]
-            
+                        desired_V = row["desired_V"]     
+    # Get from user if no file is given                     
     else:
         V_err = 1
         while(V_err):
@@ -82,7 +84,9 @@ def main():
                 print("Incorrect voltage range!")
                 continue        
             V_err = 0
-
+    
+   
+    # Plot the initial charging plot from current_V to desired_V
     flag, V_charge_rate, cumulative_V, time_sec = Charging_Plot(power_data, sec, current_V, desired_V)
     
     if (not flag):
@@ -93,53 +97,45 @@ def main():
     
     while(True):
         
+        # Read the modes and duration from the description file
         if(file_flag == 'y'):
             with open(file_path,"r") as csvfile_2:
                 reader = csv.DictReader(csvfile_2)
                 for row in reader:             
-                    mode = row["mode"]
-                    duration = int(row["duration"])   
-
-                    if (mode == '0'):
-                        discharge_rate = 0
-                    elif (mode == '1'):
-                        discharge_rate = -0.000912088*2
-                        
-                    elif (mode == '2'):
-                        discharge_rate = -0.00177615*2
-                        
-                    elif (mode == '3'):
-                        discharge_rate = -0.00555411*2
-                        
-                    elif (mode == '4'):
-                        discharge_rate = -0.000133688*2
-                            
-                    time_sec, net_V = discharging_Plot(V_charge_rate, net_V, time_sec, discharge_rate, duration)
-                
+                    mode = int(row["mode"])
+                    duration = int(row["duration"])
+                    discharge_rate = set_discharge(mode)
+                    
+                    if(mode != 4):
+                        time_sec, net_V = discharging_Plot(V_charge_rate, net_V, time_sec, discharge_rate, duration)
+                    
+                    else:
+                        target_V = float(row["target_V"])
+                        time_sec, net_V = sleep_mode_plot(V_charge_rate, net_V, time_sec, discharge_rate,target_V,sec,accuracy)
+                    
                 csvfile_2.close()
                 break
             
         else:    
             print("\n\nModes of operation\noff - 0, active - 1, sense - 2, radio - 3, sleep - 4")
-        
-            mode = input("Enter mode of operation: ")   
-            if (mode == '0'):
-                discharge_rate = 0
-            elif (mode == '1'):
-                discharge_rate = -0.000912088*2
-            elif (mode == '2'):
-                discharge_rate = -0.00177615*2
-            elif (mode == '3'):
-                discharge_rate = -0.00555411*2
-            elif (mode == '4'):
-                discharge_rate = -0.000133688*2
+            mode = int(input("Enter mode of operation: "))
+            discharge_rate = set_discharge(mode)
+            
+            if(mode != 4):
+                duration = int(input("Enter time(s) of operation: "))
+                time_sec, net_V = discharging_Plot(V_charge_rate, net_V, time_sec, discharge_rate, duration)
+            
             else:
-                print("\nIncorrect mode entered! ")
-                continue
-            duration = int(input("Enter time(s) of operation: "))
-        
-            time_sec, net_V = discharging_Plot(V_charge_rate, net_V, time_sec, discharge_rate, duration)
-
+                V_err = 1
+                while(V_err):
+                    target_V = input("Enter desired voltage to reach: ")
+                    if(float(target_V  ) < net_V[-1] or float(target_V  ) > V_max):
+                        V_err = 1
+                        print("Incorrect voltage range!")
+                        continue        
+                    V_err = 0
+                time_sec, net_V = sleep_mode_plot(V_charge_rate, net_V, time_sec, discharge_rate,target_V,sec,accuracy)
+              
 
 # Changing input data to seconds and minutes
 def hour_to_sec(data):
@@ -165,8 +161,6 @@ def FullDay_Plot(power_data):
     time_sec = []
     V = []
     
-    #power = pmax * (numpy.divide(Irradiance, Gstandard))
-
     power = (numpy.divide(power_data, 1000000))
 
     # Capacitor Voltage Charging Rate at Every Time Instant(Min)
@@ -230,11 +224,28 @@ def Charging_Plot(power_data, sec, current_V, desired_V):
     return flag, V_charge_rate, cumulative_V, time_sec
 
     
-def  discharging_Plot(V_charge_rate, net_V, time_sec, discharge_rate, duration):
+def set_discharge(mode):                      
+    if (mode == 0):
+        discharge_rate = 0
+    elif (mode == 1):
+        discharge_rate = -0.000912088*2
+        
+    elif (mode == 2):
+        discharge_rate = -0.00177615*2
+        
+    elif (mode == 3):
+        discharge_rate = -0.00555411*2
+        
+    elif (mode == 4):
+        discharge_rate = -0.000133688*2
+    
+    return discharge_rate
+
+                        
+def discharging_Plot(V_charge_rate, net_V, time_sec, discharge_rate, duration):
 
     #Begin plot after first full charge upto duration of mode
     for i in range(len(time_sec), len(time_sec) + int(duration)):
-
 
         future_charging = numpy.cumsum(V_charge_rate[time_sec[-1]:time_sec[-1]+ duration])
         required_V = (int(duration) * discharge_rate * -1) - (future_charging[-1])
@@ -271,14 +282,7 @@ def recharge(duration, time_sec, net_V, V_charge_rate, discharge_rate, required_
     while(True):
         time_sec.append(i)
         net_V = numpy.append(net_V, net_V[i-1] + V_charge_rate[i-1] + (-0.000133688) ) # Discharge slope for sleep mode
-        
-    #    if(net_V[i] >= V_max): 
-    #        net_V[i] = V_max
-    #        
-    #    if(net_V[i] <= V_min):
-    #        print(" Device voltage too low!")
-    #        net_V[i] = V_min
-            
+
         if (net_V[i] >= required_V + V_min + 0.01): # condition to break the loop. Required V is reached
             print("Remaining voltage recharged at : ", i)
             break
@@ -291,6 +295,183 @@ def recharge(duration, time_sec, net_V, V_charge_rate, discharge_rate, required_
         
     return net_V, time_sec
 
+def sleep_mode_plot(V_charge_rate, net_V, time_sec, discharge_rate,target_V,sec,accuracy):
     
+    const_time = []
+    const_net_V = []
+    
+    pred_time = []
+    pred_net_V = []
+    
+    actual_time = []
+    actual_net_V = []
+    
+    desired_V = target_V
+    
+    constant_V_rate = float(V_charge_rate[time_sec[-1]])
+    const_duration = (float(desired_V) - net_V[-1])/(constant_V_rate + discharge_rate)
+    net_V_temp = net_V
+
+    V_diff = float(desired_V) - float(net_V[-1])
+    
+    for i in range(len(time_sec), len(time_sec) + int(const_duration +1)):
+
+        const_time.append(i)
+        net_V_temp = numpy.append(net_V_temp, net_V_temp[i-1] + constant_V_rate + discharge_rate)
+        const_net_V.append(net_V_temp[i])
+        
+    
+    #Predicting the voltage using past 60 min charging rate
+    
+    # Getting the accuracy of the time instant, the user has specified 
+    current_accuracy = accuracy[sec + time_sec[-1]]
+    print(current_accuracy)
+    
+    weight = (-current_accuracy/10000000) * (V_diff / 0.5) # analysis was done for 0.5V
+
+    slope = numpy.polyfit(time_sec[-60 :],V_charge_rate[time_sec[-1]-60:time_sec[-1]], 1)
+    
+    slope[0] = slope[0] + weight
+    
+    i = len(time_sec)
+    net_V_temp = net_V
+
+    while(net_V_temp[-1] < float(desired_V)):
+        pred_time.append(i)
+        net_V_temp = numpy.append(net_V_temp, net_V_temp[i-1] + slope[0]*pred_time[-1] + slope[1] + discharge_rate)
+        
+        pred_net_V.append(net_V_temp[i])
+        i+=1
+        
+        
+    print("Time to reach desired V with 1 min slope data: ", int(pred_time[-1])-len(time_sec),'s')
+    
+    #Predicting the voltage with the actual data
+    future_V_rate = V_charge_rate[time_sec[-1]:]
+    
+    j = len(time_sec)
+    
+    net_V_temp = net_V
+    
+    while(net_V_temp[-1] < float(desired_V)):
+        actual_time.append(j)
+        net_V_temp = numpy.append(net_V_temp, net_V_temp[j-1] + future_V_rate[j-(len(time_sec))] + discharge_rate)
+        actual_net_V.append(net_V_temp[j])
+        j+=1
+       
+    print("Time to reach desired V at actual charging rate: ", int(actual_time[-1])-len(time_sec),'s')
+    
+    plt.plot(time_sec, net_V)
+    plt.plot(const_time,const_net_V,color ='b', linestyle = 'dashed', label = "Constant rate")
+    plt.plot(pred_time,pred_net_V,color ='r', linestyle = 'dashed',  label = ("1 minute slope prediction"))
+    plt.plot(actual_time,actual_net_V,color ='g', linestyle = 'dashed',  label = ("Actual rate"))
+    plt.legend()
+    plt.xlabel('Time (s)')
+    plt.ylabel('Cumulative Capacitor Voltage (V)')
+    plt.show()
+    
+    print("Time to reach desired V at constant charging rate: ", int(const_duration +1),'s')
+
+    for i in range(len(pred_time)):
+        time_sec.append(pred_time[i])
+    net_V = numpy.append(net_V,pred_net_V)
+
+    return time_sec, net_V
+
+
+# Need to first get v charging rate throughout the day. then using the previous min
+# rate, make prediction for each minute for all time_sec to charge from 0 to 1V
+# Store all these values in an array.
+
+def performance_analysis(power_data):
+    
+    print("Running performance analysis function ...")
+    
+    time_sec = []
+    V_charge_rate = []
+    
+    accuracy = []
+    final_accuracy = []
+    
+    start = 30000 # data point to start analysis
+    end = 60000 # to end analysis
+    discharge_rate = -0.000133688*2 # sleep mode discharge
+    step = 1 # 1 second interval
+    
+    power = (numpy.divide(power_data, 1000000))
+
+    # Capacitor Voltage Charging Rate at Every Time Instant
+    for i in range(len(power)):
+        V_charge_rate.append(numpy.sqrt(2 * float(power[i]) / (C)))  # One second intervals
+        
+    # Power Generated at Every Time Instant
+    for i in range(len(V_charge_rate)):
+        time_sec.append(i) 
+   
+    #for i in range(start, start+10):
+    for i in range(start, end, step): # iterating for every 60 seconds from start to end
+        
+        pred_time = []
+        pred_net_V = []
+        actual_time = []
+        actual_net_V = []
+    
+        #Predicting the voltage using past 1 min charging rate
+        slope = numpy.polyfit(time_sec[i-60:i],V_charge_rate[i-60:i], 1)
+       
+        net_V = [0]
+        j = i
+
+        while(net_V[-1] <= 0.5):
+
+            pred_time.append(j)
+            net_V = numpy.append(net_V, net_V[-1] + slope[0]*pred_time[-1] + slope[1] + discharge_rate)
+            if(net_V[-1]<=0):
+                net_V [-1] = 0
+            pred_net_V.append(net_V[-1])
+            j+=1
+            if(j-i>1800): #if device doesnt charge in over 30 mins with past minute data
+                print("Can't predict with past minute data at point:",i)
+                break
+    
+        #Predicting the voltage with the actual data
+        future_V_rate = V_charge_rate[time_sec[i]:]
+
+        j = 0
+        
+        net_V = [0]
+        
+        while(net_V[-1] <= 0.5):
+            actual_time.append(j)
+            net_V = numpy.append(net_V, net_V[-1] + future_V_rate[j] + discharge_rate)
+            if(net_V[-1]<=0):
+                net_V [-1] = 0
+            actual_net_V.append(net_V[j])
+            j+=1
+           
+        accuracy.append(int(actual_time[-1])-int(pred_time[-1]-i))
+        
+    print("Performance analysis finished!")
+
+    # Replace the unpredicted elements with zero    
+    for i in range(len(accuracy)):
+        if accuracy[i] < -1500:
+            accuracy[i] = 0
+    
+    # Intialize final_accuracy array with zeros        
+    final_accuracy = numpy.zeros(len(time_sec), dtype=int)
+    
+    # Append the calculated values to the final_accuracy array in the correct position
+    for element in accuracy:
+        for i in range(step):
+            final_accuracy[start + i] = element
+        start += step
+    
+    with open('accuracy.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        for element in final_accuracy:
+            writer.writerow([element])
+            
+            
 if __name__ == "__main__":
     main()
